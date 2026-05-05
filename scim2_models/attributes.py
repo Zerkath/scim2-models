@@ -1,3 +1,4 @@
+from functools import cache, lru_cache
 from inspect import isclass
 from typing import Annotated
 from typing import Any
@@ -51,6 +52,7 @@ class MultiValuedComplexAttribute(ComplexAttribute):
     reference."""
 
 
+@lru_cache(maxsize=128)
 def is_complex_attribute(type_: type) -> bool:
     # issubclass raise a TypeError with 'Reference' on python < 3.11
     return (

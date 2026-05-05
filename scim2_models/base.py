@@ -1,4 +1,5 @@
 import warnings
+from functools import cache, lru_cache
 from inspect import isclass
 from typing import Any
 from typing import Optional
@@ -69,7 +70,8 @@ def _attr_matches(requested: str, current_urn: str) -> bool:
     )
 
 
-def _exact_attr_match(attrs: list[str], current_urn: str) -> bool:
+@lru_cache(maxsize=256)
+def _exact_attr_match(attrs: tuple[str, ...], current_urn: str) -> bool:
     """Check if current_urn exactly matches any entry in attrs (case-insensitive).
 
     Used for ``excludedAttributes`` matching and :attr:`Returned.request` checking,
@@ -86,8 +88,8 @@ def _exact_attr_match(attrs: list[str], current_urn: str) -> bool:
                 return True
     return False
 
-
-def _is_attribute_requested(requested_attrs: list[str], current_urn: str) -> bool:
+@lru_cache(maxsize=256)
+def _is_attribute_requested(requested_attrs: tuple[str, ...], current_urn: str) -> bool:
     """Check if an attribute should be included based on the requested attributes.
 
     Returns True if:
@@ -156,6 +158,7 @@ class BaseModel(PydanticBaseModel):
         return field_annotation
 
     @classmethod
+    @lru_cache(maxsize=256)
     def get_field_root_type(cls, attribute_name: str) -> type | None:
         """Extract the root type from a model field.
 
@@ -549,11 +552,14 @@ class BaseModel(PydanticBaseModel):
         value = handler(value)
         scim_ctx = info.context.get("scim") if info.context else None
 
-        if scim_ctx and Context.is_request(scim_ctx):
-            value = self._scim_request_serializer(value, info)
+        if scim_ctx is None:
+            return value
 
-        if scim_ctx and Context.is_response(scim_ctx):
-            value = self._scim_response_serializer(value, info)
+        if Context.is_request(scim_ctx):
+            return self._scim_request_serializer(value, info)
+
+        if Context.is_response(scim_ctx):
+            return self._scim_response_serializer(value, info)
 
         return value
 
@@ -587,10 +593,8 @@ class BaseModel(PydanticBaseModel):
         """Serialize the fields according to returnability indications passed in the serialization context."""
         returnability = self.get_field_annotation(info.field_name, Returned)
         attribute_urn = self.get_attribute_urn(info.field_name)
-        included_attrs = info.context.get("scim_attributes", []) if info.context else []
-        excluded_attrs = (
-            info.context.get("scim_excluded_attributes", []) if info.context else []
-        )
+        included_attrs = tuple(sorted(info.context.get("scim_attributes", []))) if info.context else ()
+        excluded_attrs = tuple(sorted(info.context.get("scim_excluded_attributes", []))) if info.context else ()
 
         if returnability == Returned.never:
             return None
@@ -615,8 +619,14 @@ class BaseModel(PydanticBaseModel):
     def model_serializer_exclude_none(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> dict[str, Any]:
-        """Remove `None` values inserted by the :meth:`~scim2_models.base.BaseModel.scim_serializer`."""
-        self._set_complex_attribute_urns()
+        """Remove `None` values inserted by the :meth:`~scim2_models.base.BaseModel.scim_serializer`.
+
+        When no SCIM context is set, :meth:`scim_serializer` is a no-op so the
+        URN walk and the ``None`` filter are dead work and short-circuited.
+        """
+        scim_ctx = info.context.get("scim") if info.context else None
+        if scim_ctx is not None:
+            self._set_complex_attribute_urns()
         result = handler(self)
         return {key: value for key, value in result.items() if value is not None}
 
