@@ -50,6 +50,9 @@ dev = [
     "pytest-cov>=6.0.0",
     "prek>=0.1.0",
     "tox-uv>=1.16.0",
+    "pyinstrument>=5.1.2",
+    "pyperf>=2.10.0",
+    "ruff>=0.15.12",
 ]
 doc = [
     "autodoc-pydantic>=2.2.0",
